@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use std::io::Write;
 use std::net::TcpListener;
 
 fn main() {
@@ -13,6 +14,7 @@ fn main() {
         match stream {
             Ok(mut stream) => {
                 println!("{:?}", stream);
+                stream.write_all(b"+PONG\r\n").unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);

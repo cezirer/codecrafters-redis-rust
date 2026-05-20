@@ -27,6 +27,6 @@ fn main() {
                 println!("error: {}", e);
             }
         });
-        handle.join().unwrap();
+        // handle.join().unwrap();
     }
 }

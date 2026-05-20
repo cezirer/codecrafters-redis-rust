@@ -18,7 +18,7 @@ fn main() {
                 loop {
                     let bytes_read = stream.read(&mut buf).unwrap();
                     let s = String::from_utf8(Vec::from(buf)).unwrap();
-                    println!("{}", s);
+                    println!("s: {}", s);
                     if bytes_read == 0 {
                         break;
                     }

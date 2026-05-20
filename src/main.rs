@@ -12,11 +12,13 @@ fn main() {
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
 
     for stream in listener.incoming() {
-        let handle = thread::spawn(|| match stream {
+        let handle = thread::spawn(move || match stream {
             Ok(mut stream) => {
                 let mut buf = [0; 512];
                 loop {
                     let bytes_read = stream.read(&mut buf).unwrap();
+                    let s = String::from_utf8(Vec::from(buf)).unwrap();
+                    println!("{}", s);
                     if bytes_read == 0 {
                         break;
                     }

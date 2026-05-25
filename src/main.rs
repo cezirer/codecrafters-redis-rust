@@ -18,6 +18,10 @@ impl CmdRegistry {
             "echo".to_string(),
             Box::new(rediz_cmd::echo::EchoCmd) as Box<dyn Cmd + Send + Sync>,
         );
+        handlers.insert(
+            "ping".to_string(),
+            Box::new(rediz_cmd::ping::PingCmd) as Box<dyn Cmd + Send + Sync>,
+        );
         Self { handlers: handlers }
     }
     pub fn get(&self, cmd_name: &str) -> Option<&Box<dyn Cmd + Send + Sync>> {

@@ -5,8 +5,9 @@ use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
-mod parser;
+mod db;
 mod rediz_cmd;
+use db::Db;
 use rediz_cmd::Cmd;
 pub struct CmdRegistry {
     handlers: HashMap<String, Box<dyn Cmd + Send + Sync>>,
@@ -22,6 +23,14 @@ impl CmdRegistry {
             "ping".to_string(),
             Box::new(rediz_cmd::ping::PingCmd) as Box<dyn Cmd + Send + Sync>,
         );
+        handlers.insert(
+            "set".to_string(),
+            Box::new(rediz_cmd::set::SetCmd) as Box<dyn Cmd + Send + Sync>,
+        );
+        handlers.insert(
+            "get".to_string(),
+            Box::new(rediz_cmd::get::GetCmd) as Box<dyn Cmd + Send + Sync>,
+        );
         Self { handlers: handlers }
     }
     pub fn get(&self, cmd_name: &str) -> Option<&Box<dyn Cmd + Send + Sync>> {
@@ -29,15 +38,14 @@ impl CmdRegistry {
     }
 }
 fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
-    // Uncomment the code below to pass the first stage
-    //
     let cmd_registry = CmdRegistry::new();
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
     let shared_registry = Arc::new(cmd_registry);
+    let db = Arc::new(Db::new());
     for stream in listener.incoming() {
         let registry_clone = Arc::clone(&shared_registry);
+        let db_clone = Arc::clone(&db);
         thread::spawn(move || match stream {
             Ok(mut stream) => {
                 let mut write_stream = stream.try_clone().unwrap();
@@ -65,7 +73,7 @@ fn main() {
                                     } else {
                                         a[1..].to_vec()
                                     };
-                                    cmd.execute(argv, &mut write_stream);
+                                    let _ = cmd.execute(argv, &mut write_stream, &db_clone);
                                 } else {
                                     eprintln!("")
                                 }
@@ -96,32 +104,127 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
-    #[test]
-    fn test_ping_pong() {
-        // 注意：运行此测试时，确保主程序 cargo run 已经在后台启动了
-        let mut stream =
-            TcpStream::connect("127.0.0.1:6379").expect("无法连接到服务器，请确保主程序已在运行！");
 
+    /// 发送 RESP 命令并读取响应
+    fn send_cmd(stream: &mut TcpStream, cmd: &[&str]) -> String {
+        let arr: Vec<Value> = cmd
+            .iter()
+            .map(|s| Value::Bulk(s.to_string()))
+            .collect();
+        stream.write_all(&encode(&Value::Array(arr))).unwrap();
+        let mut buf = [0; 512];
+        let n = stream.read(&mut buf).unwrap();
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+
+    /// 创建一个连接到本地 Redis 服务器的 stream
+    fn connect() -> TcpStream {
+        let mut stream =
+            TcpStream::connect("127.0.0.1:6379").expect("无法连接到服务器，请先 cargo run 启动！");
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        // 构造一个符合 Redis 规范的数组命令：["PING"]
-        let cmd = Value::Array(vec![
-            Value::Bulk(String::from("ECHO")),
-            Value::Bulk(String::from("hey")),
-        ]);
+        stream
+    }
 
-        // 变成字节数组发出去
-        stream.write_all(&encode(&cmd)).unwrap();
+    // ─── SET 正常路径 ───
 
-        // // 读取服务器返回的响应
-        let mut buf = [0; 512];
-        let bytes_read = stream.read(&mut buf).unwrap();
-        let response = String::from_utf8_lossy(&buf[..bytes_read]);
+    #[test]
+    fn test_set_ok() {
+        let mut stream = connect();
+        let resp = send_cmd(&mut stream, &["SET", "apple", "red"]);
+        assert_eq!(resp, "+OK\r\n");
+    }
 
-        // 断言返回值是否为 +PONG\r\n
-        // assert_eq!(response, "+PONG\r\n");
-        println!("{}", response);
-        // println!("测试通过！收到了预期的 PONG");
+    #[test]
+    fn test_set_empty_key() {
+        let mut stream = connect();
+        let resp = send_cmd(&mut stream, &["SET", "", "value"]);
+        // 空 key 是合法的，应该返回 +OK
+        assert_eq!(resp, "+OK\r\n");
+    }
+
+    #[test]
+    fn test_set_empty_value() {
+        let mut stream = connect();
+        let resp = send_cmd(&mut stream, &["SET", "mykey", ""]);
+        // 空 value 也是合法的，应该返回 +OK
+        assert_eq!(resp, "+OK\r\n");
+    }
+
+    // ─── SET 错误路径 ───
+
+    #[test]
+    fn test_set_wrong_args_count() {
+        let mut stream = connect();
+        let resp = send_cmd(&mut stream, &["SET", "onlykey"]);
+        assert!(resp.starts_with("-ERR"), "期望 -ERR，实际收到: {resp}");
+    }
+
+    // ─── GET 正常路径 ───
+
+    #[test]
+    fn test_get_existing_key() {
+        let mut stream = connect();
+        // 先 SET
+        send_cmd(&mut stream, &["SET", "banana", "yellow"]);
+        // 再 GET（同一个连接）
+        let resp = send_cmd(&mut stream, &["GET", "banana"]);
+        assert_eq!(resp, "$6\r\nyellow\r\n");
+    }
+
+    #[test]
+    fn test_get_non_existing_key() {
+        let mut stream = connect();
+        let resp = send_cmd(&mut stream, &["GET", "nonexistent"]);
+        assert_eq!(resp, "$-1\r\n");
+    }
+
+    #[test]
+    fn test_get_after_overwrite() {
+        let mut stream = connect();
+        send_cmd(&mut stream, &["SET", "color", "red"]);
+        send_cmd(&mut stream, &["SET", "color", "blue"]);
+        let resp = send_cmd(&mut stream, &["GET", "color"]);
+        assert_eq!(resp, "$4\r\nblue\r\n");
+    }
+
+    #[test]
+    fn test_get_empty_value() {
+        let mut stream = connect();
+        send_cmd(&mut stream, &["SET", "emptykey", ""]);
+        let resp = send_cmd(&mut stream, &["GET", "emptykey"]);
+        // 空字符串 → $0\r\n\r\n
+        assert_eq!(resp, "$0\r\n\r\n");
+    }
+
+    // ─── GET 错误路径 ───
+
+    #[test]
+    fn test_get_wrong_args_count() {
+        let mut stream = connect();
+        // GET 不带参数
+        let resp = send_cmd(&mut stream, &["GET"]);
+        assert!(resp.starts_with("-ERR"), "期望 -ERR，实际收到: {resp}");
+    }
+
+    // ─── 序列化/反序列化 round-trip ───
+
+    #[test]
+    fn test_set_get_roundtrip() {
+        let mut stream = connect();
+        let cases = vec![
+            ("hello", "world"),
+            ("number", "42"),
+            ("special", "!@#$%"),
+            ("中文", "测试"),
+        ];
+        for (k, v) in &cases {
+            let resp = send_cmd(&mut stream, &["SET", k, v]);
+            assert_eq!(resp, "+OK\r\n", "SET {k} {v} 失败");
+            let resp = send_cmd(&mut stream, &["GET", k]);
+            let expected = format!("${}\r\n{}\r\n", v.len(), v);
+            assert_eq!(resp, expected, "GET {k} 返回值不匹配");
+        }
     }
 }

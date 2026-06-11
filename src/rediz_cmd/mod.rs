@@ -7,12 +7,12 @@ pub mod echo;
 pub mod get;
 pub mod ping;
 pub mod set;
-
+use crate::context::Context;
 pub trait Cmd {
-    fn execute(
+    fn execute<'a>(
         &self,
         argv: Vec<Value>,
         stream: &mut TcpStream,
-        db: &Db,
+        ctx: &Context<'a>,
     ) -> Result<(), std::io::Error>;
 }

@@ -2,7 +2,7 @@ use std::io::Write;
 
 use resp::{Value, encode};
 
-use crate::rediz_cmd::Cmd;
+use crate::rediz_cmd::{Cmd, Context};
 pub struct GetCmd;
 
 impl Cmd for GetCmd {
@@ -10,9 +10,9 @@ impl Cmd for GetCmd {
         &self,
         argv: Vec<resp::Value>,
         stream: &mut std::net::TcpStream,
-        db_shared: &crate::db::Db,
+        ctx: &Context,
     ) -> Result<(), std::io::Error> {
-        let mut guard = db_shared.kv_store.read().unwrap();
+        let guard = ctx.db.kv_store.read().unwrap();
         if argv.len() < 1 {
             stream.write_all(b"-ERR wrong number of arguments for 'get' command\r\n")?;
             return Ok(());

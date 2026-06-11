@@ -1,9 +1,10 @@
 use resp::Value;
 
+use crate::db::Db;
 use crate::rediz_cmd::Cmd;
+use crate::rediz_cmd::Context;
 use std::io::{Error, Write};
 use std::net::TcpStream;
-
 pub struct SetCmd;
 
 impl Cmd for SetCmd {
@@ -11,9 +12,9 @@ impl Cmd for SetCmd {
         &self,
         argv: Vec<resp::Value>,
         stream: &mut TcpStream,
-        db_shared: &crate::db::Db,
+        ctx: &Context,
     ) -> Result<(), std::io::Error> {
-        let mut guard = db_shared.kv_store.write().unwrap();
+        let mut guard = ctx.db.kv_store.write().unwrap();
         if argv.len() < 2 {
             stream.write_all(b"-ERR wrong number of arguments for 'set' command\r\n")?;
             return Ok(());

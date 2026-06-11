@@ -5,9 +5,12 @@ use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
+mod context;
 mod db;
 mod rediz_cmd;
+use context::Context;
 use db::Db;
+
 use rediz_cmd::Cmd;
 pub struct CmdRegistry {
     handlers: HashMap<String, Box<dyn Cmd + Send + Sync>>,
@@ -73,7 +76,8 @@ fn main() {
                                     } else {
                                         a[1..].to_vec()
                                     };
-                                    let _ = cmd.execute(argv, &mut write_stream, &db_clone);
+                                    let ctx = Context { db: &db_clone };
+                                    let _ = cmd.execute(argv, &mut write_stream, &ctx);
                                 } else {
                                     eprintln!("")
                                 }
@@ -103,14 +107,12 @@ mod tests {
     use resp::{self, Value, encode};
     use std::io::{Read, Write};
     use std::net::TcpStream;
-    use std::time::Duration;
+    use std::thread::sleep;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     /// 发送 RESP 命令并读取响应
     fn send_cmd(stream: &mut TcpStream, cmd: &[&str]) -> String {
-        let arr: Vec<Value> = cmd
-            .iter()
-            .map(|s| Value::Bulk(s.to_string()))
-            .collect();
+        let arr: Vec<Value> = cmd.iter().map(|s| Value::Bulk(s.to_string())).collect();
         stream.write_all(&encode(&Value::Array(arr))).unwrap();
         let mut buf = [0; 512];
         let n = stream.read(&mut buf).unwrap();
@@ -125,6 +127,14 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
         stream
+    }
+
+    fn unique_key(name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{name}:{nanos}")
     }
 
     // ─── SET 正常路径 ───
@@ -226,5 +236,50 @@ mod tests {
             let expected = format!("${}\r\n{}\r\n", v.len(), v);
             assert_eq!(resp, expected, "GET {k} 返回值不匹配");
         }
+    }
+
+    // ─── SET PX 过期时间 ───
+
+    #[test]
+    fn test_set_px_value_is_available_before_expiry() {
+        let mut stream = connect();
+        let key = unique_key("px-before-expiry");
+
+        let resp = send_cmd(&mut stream, &["SET", &key, "value", "PX", "500"]);
+        assert_eq!(resp, "+OK\r\n");
+
+        let resp = send_cmd(&mut stream, &["GET", &key]);
+        assert_eq!(resp, "$5\r\nvalue\r\n");
+    }
+
+    #[test]
+    fn test_set_px_key_expires_after_duration() {
+        let mut stream = connect();
+        let key = unique_key("px-after-expiry");
+
+        let resp = send_cmd(&mut stream, &["SET", &key, "gone", "PX", "100"]);
+        assert_eq!(resp, "+OK\r\n");
+
+        sleep(Duration::from_millis(150));
+
+        let resp = send_cmd(&mut stream, &["GET", &key]);
+        assert_eq!(resp, "$-1\r\n");
+    }
+
+    #[test]
+    fn test_set_without_px_overwrites_and_clears_existing_expiry() {
+        let mut stream = connect();
+        let key = unique_key("px-overwrite");
+
+        let resp = send_cmd(&mut stream, &["SET", &key, "short", "PX", "100"]);
+        assert_eq!(resp, "+OK\r\n");
+
+        let resp = send_cmd(&mut stream, &["SET", &key, "persist"]);
+        assert_eq!(resp, "+OK\r\n");
+
+        sleep(Duration::from_millis(150));
+
+        let resp = send_cmd(&mut stream, &["GET", &key]);
+        assert_eq!(resp, "$7\r\npersist\r\n");
     }
 }

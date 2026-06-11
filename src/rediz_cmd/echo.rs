@@ -1,3 +1,4 @@
+use crate::context::Context;
 use crate::db::Db;
 use crate::rediz_cmd::Cmd;
 use resp::{Value, encode};
@@ -8,7 +9,7 @@ impl Cmd for EchoCmd {
         &self,
         argv: Vec<Value>,
         stream: &mut TcpStream,
-        _: &Db,
+        _: &Context,
     ) -> Result<(), std::io::Error> {
         let mut s = String::new();
         argv.iter().for_each(|v| {
